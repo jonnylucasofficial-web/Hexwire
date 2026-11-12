@@ -1,0 +1,5 @@
+build*/
+JUCE/
+out/
+*.wav
+.DS_Store

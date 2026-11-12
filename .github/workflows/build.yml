@@ -1,0 +1,62 @@
+name: Build Hexwire
+on: [push, workflow_dispatch]
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: "Configure (universal - Apple Silicon + Intel)"
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCOPY_PLUGINS=OFF
+      - name: Build AU + VST3
+        run: cmake --build build --config Release --target Hexwire_AU Hexwire_VST3 Hexwire_Standalone -- -quiet
+      - name: Ad-hoc sign
+        run: |
+          codesign --force --deep -s - build/Hexwire_artefacts/Release/AU/Hexwire.component
+          codesign --force --deep -s - build/Hexwire_artefacts/Release/VST3/Hexwire.vst3
+          codesign --force --deep -s - build/Hexwire_artefacts/Release/Standalone/Hexwire.app
+      - name: Validate AU
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/Hexwire_artefacts/Release/AU/Hexwire.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aufx Hxwr Jluc
+      - name: Make installer
+        run: |
+          mkdir -p root/Library/Audio/Plug-Ins/Components root/Library/Audio/Plug-Ins/VST3 root/Applications
+          cp -R build/Hexwire_artefacts/Release/Standalone/Hexwire.app root/Applications/
+          cp -R build/Hexwire_artefacts/Release/AU/Hexwire.component root/Library/Audio/Plug-Ins/Components/
+          cp -R build/Hexwire_artefacts/Release/VST3/Hexwire.vst3 root/Library/Audio/Plug-Ins/VST3/
+          pkgbuild --analyze --root root components.plist
+          python3 - <<'PY'
+          import plistlib
+          comps = plistlib.load(open("components.plist", "rb"))
+          print("bundles:", [c.get("RootRelativeBundlePath") for c in comps])
+          for c in comps:
+              c["BundleIsRelocatable"] = False
+              c["BundleIsVersionChecked"] = False
+              c["BundleOverwriteAction"] = "upgrade"
+          plistlib.dump(comps, open("components.plist", "wb"))
+          PY
+          pkgbuild --root root --component-plist components.plist --identifier com.jonnylucas.hexwire.pkg --version 1.0.${{ github.run_number }} --install-location / Hexwire-Installer.pkg
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Hexwire-Mac-Installer
+          path: Hexwire-Installer.pkg
+      - name: Publish download page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag -R ${{ github.repository }} || true
+          gh release create latest Hexwire-Installer.pkg -R ${{ github.repository }} --title "Hexwire for Mac" --notes "Download Hexwire-Installer.pkg below and open it. Installs the AU and VST3 plug-ins plus the standalone Hexwire app in Applications."
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCOPY_PLUGINS=OFF
+      - run: cmake --build build --config Release --target Hexwire_VST3 Hexwire_Standalone
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Hexwire-Windows-VST3
+          path: build/Hexwire_artefacts/Release/VST3
