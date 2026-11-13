@@ -8,15 +8,17 @@ namespace
    #ifdef HEXWIRE_DEBUG
     float envOr (const char* n, float d) { auto* v = std::getenv (n); return v ? (float) std::atof (v) : d; }
     float tunSmooth = envOr ("T_SM", 0.8f), tunFloor = envOr ("T_FL", 0.3f), tunRel = envOr ("T_REL", 0.15f);
+    float tunFloorDb = envOr ("T_FLOORDB", -14.0f), tunMaxNotes = envOr ("T_MAXN", 4.0f), tunRingDb = envOr ("T_RINGDB", -15.0f), tunRelHold = envOr ("T_RELHOLD", 0.15f), tunFast = envOr ("T_FAST", 0.25f);
    #else
     constexpr float tunSmooth = 0.8f, tunFloor = 0.3f, tunRel = 0.15f;
+    constexpr float tunFloorDb = -14.0f, tunMaxNotes = 4.0f, tunRingDb = -15.0f, tunRelHold = 0.15f, tunFast = 0.25f;
    #endif
     constexpr float twoPi = 6.28318530718f;
 
-    enum Engine { Cello, Marimba, Bells, Pluck, Flute, Brass, Choir, Organ, Pad, Chip, Kalimba, Sub, NumEngines };
+    enum Engine { Cello, Marimba, Bells, Pluck, Flute, Brass, Choir, Organ, Pad, Chip, Kalimba, Sub, Analog, Soft, NumEngines };
     // measured so every engine plays back at about the same loudness (tests/Test.cpp ENGINE_LEVEL)
-    constexpr float engineGain[NumEngines] = { 0.53f, 1.02f, 0.97f, 2.1f, 0.49f, 0.52f, 0.41f, 0.70f, 0.70f, 0.555f, 0.857f, 0.32f };
-    constexpr bool isPerc[NumEngines] = { false, true, true, true, false, false, false, false, false, false, true, false };
+    constexpr float engineGain[NumEngines] = { 0.738f, 1.569f, 1.405f, 3.371f, 0.592f, 0.663f, 0.817f, 0.888f, 0.944f, 0.700f, 1.271f, 0.419f, 0.626f, 0.722f };
+    constexpr bool isPerc[NumEngines] = { false, true, true, true, false, false, false, false, false, false, true, false, false, false };
 
     inline float midiToHz (float m) { return 440.0f * std::exp2 ((m - 69.0f) / 12.0f); }
     inline float hzToMidi (float f) { return 69.0f + 12.0f * std::log2 (f / 440.0f); }
@@ -47,7 +49,7 @@ namespace
 }
 
 const juce::StringArray HexwireProcessor::engineNames { "Cello", "Marimba", "Bells", "Pluck", "Flute", "Brass",
-                                                        "Choir", "Organ", "Pad", "Chip", "Kalimba", "Sub" };
+                                                        "Choir", "Organ", "Pad", "Chip", "Kalimba", "Sub", "Analog", "Soft" };
 
 HexwireProcessor::HexwireProcessor()
     : AudioProcessor (BusesProperties()
@@ -84,7 +86,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HexwireProcessor::createLayo
 
     knob ("octA",    "Oct A",    { -2.0f, 2.0f, 1.0f }, 0.0f, oct);
     knob ("octB",    "Oct B",    { -2.0f, 2.0f, 1.0f }, 0.0f, oct);
-    knob ("detune",  "Detune B", { 0.0f, 50.0f, 0.1f }, 6.0f, [] (float v, int) { return String (v, 1) + " ct"; });
+    knob ("detune",  "Detune B", { 0.0f, 25.0f, 0.1f }, 5.0f, [] (float v, int) { return String (v, 1) + " ct"; });
     knob ("blend",   "Blend",    { 0.0f, 1.0f }, 0.0f, [] (float v, int) {
               const int b = juce::roundToInt (v * 100.0f);
               return b == 0 ? String ("A") : b == 100 ? String ("B") : String (100 - b) + "/" + String (b); });
@@ -94,9 +96,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout HexwireProcessor::createLayo
     knob ("glide",   "Glide",    { 0.0f, 500.0f, 0.0f, 0.4f }, 0.0f, ms);
     knob ("attack",  "Attack",   { 1.0f, 3000.0f, 0.0f, 0.3f }, 15.0f, ms);
     knob ("release", "Release",  { 10.0f, 6000.0f, 0.0f, 0.3f }, 250.0f, ms);
-    knob ("dynamics","Dynamics", { 0.0f, 1.0f }, 0.6f, pct);
+    knob ("dynamics","Dynamics", { 0.0f, 1.0f }, 0.3f, pct);
     knob ("thresh",  "Thresh",   { -72.0f, -24.0f, 0.1f }, -54.0f, db);
-    knob ("chorus",  "Chorus",   { 0.0f, 1.0f }, 0.2f, pct);
+    knob ("chorus",  "Chorus",   { 0.0f, 1.0f }, 0.1f, pct);
     knob ("space",   "Space",    { 0.0f, 1.0f }, 0.25f, pct);
     knob ("mix",     "Mix",      { 0.0f, 1.0f }, 0.9f, [] (float v, int) { return String (juce::roundToInt (v * 100.0f)) + "% synth"; });
     knob ("output",  "Output",   { -24.0f, 12.0f, 0.1f }, 0.0f, db);
@@ -264,7 +266,7 @@ void HexwireProcessor::analysePoly (int sampleIndex)
     if (std::getenv ("HWDBG")) { std::printf ("frame rms %.4f onset %d anaRate %.0f\n", rms, (int) onset, anaRate);
         for (int k = 2; k < 600; ++k) if (mag[(size_t) k] > mag[(size_t) k-1] && mag[(size_t) k] >= mag[(size_t) k+1] && mag[(size_t) k] > 0.01f) std::printf ("    peak %.1f Hz %.4f\n", k * anaRate / fftSize, mag[(size_t) k]); }
    #endif
-    for (int iter = 0; iter < maxVoices; ++iter)
+    for (int iter = 0; iter < (int) tunMaxNotes; ++iter)
     {
         for (size_t c = 0; c < cands.size(); ++c)
         {
@@ -342,9 +344,29 @@ void HexwireProcessor::analysePoly (int sampleIndex)
         }
     }
 
-    // --- match detections to voices
+    // --- note tracking: hold notes steadily while the string rings, change cleanly on a new strum
+    float loudest = 0;
+    for (auto& d : dets) loudest = juce::jmax (loudest, d.amp);
+
+    // how strongly is this note still present in the raw spectrum? (fundamental or 2nd harmonic)
+    auto presence = [&] (float midi)
+    {
+        const int ci = juce::jlimit (0, (int) cands.size() - 1, (int) std::round ((midi - 38.0f) * 4.0f));
+        const auto& cd = cands[(size_t) ci];
+        float m = 0;
+        for (int h = 0; h < juce::jmin (2, cd.numHarm); ++h)
+        {
+            const auto& r = harms[(size_t) (cd.firstHarm + h)];
+            for (int k = r.lo; k <= r.hi; ++k) m = juce::jmax (m, mag[(size_t) k]);
+        }
+        return m;
+    };
+
+    if (onset)
+        for (auto& v : voices) if (v.gate) v.reconfirm = 4;   // a new strum: every held note must show up again
+
     for (auto& v : voices) v.matched = false;
-    std::array<bool, maxVoices> used {};
+    std::array<bool, 16> used {};
     for (int pass = 0; pass < 2; ++pass)
     {
         const float maxDist = pass == 0 ? 0.7f : 1.6f;
@@ -359,49 +381,95 @@ void HexwireProcessor::analysePoly (int sampleIndex)
                 const float d = std::abs (v.targetMidi - dets[di].midi);
                 if (d < bd) { bd = d; bestV = vi; }
             }
-            if (bestV >= 0)
-            {
-                auto& v = voices[(size_t) bestV];
-                v.matched = true; used[di] = true;
-                const bool repick = onset && dets[di].amp > v.ampTarget * 1.3f;
-                v.targetMidi = dets[di].midi;
-                v.ampTarget = dets[di].amp;
-                v.misses = 0;
-                if (repick)
-                {
-                    noteOff (bestV, sampleIndex);
-                    noteOn (bestV, dets[di].midi, dets[di].amp, sampleIndex);
-                }
-            }
-        }
-    }
-    for (int vi = 0; vi < maxVoices; ++vi)
-    {
-        auto& v = voices[(size_t) vi];
-        if (v.gate && ! v.matched)
-        {
-            v.ampTarget *= 0.7f;
-            if (++v.misses >= 3) noteOff (vi, sampleIndex);
+            if (bestV < 0) continue;
+            auto& v = voices[(size_t) bestV];
+            v.matched = true; used[di] = true;
+            // smooth the pitch a little (median of the last three readings) so held notes don't warble
+            v.hist[v.histN++ % 3] = dets[di].midi;
+            float h0 = v.hist[0], h1 = v.hist[1], h2 = v.hist[2];
+            const float med = v.histN >= 3 ? juce::jmax (juce::jmin (h0, h1), juce::jmin (juce::jmax (h0, h1), h2)) : dets[di].midi;
+            v.targetMidi = std::abs (dets[di].midi - v.targetMidi) > 0.45f ? dets[di].midi : med;   // real bends still get through
+            const bool repick = v.reconfirm > 0 && onset && dets[di].amp > v.ampTarget * 1.5f;
+            v.ampTarget = dets[di].amp;
+            v.peakAmp = juce::jmax (v.peakAmp * 0.999f, dets[di].amp);
+            v.misses = 0;
+            v.reconfirm = 0;
+            if (repick) { v.strike = true; v.vel = juce::jlimit (0.15f, 1.0f, std::pow (dets[di].amp / 0.2f, 0.6f)); }
         }
     }
 
-    // --- new notes need two frames in a row (or one frame on a clear pick)
+    for (int vi = 0; vi < maxVoices; ++vi)
+    {
+        auto& v = voices[(size_t) vi];
+        if (! v.gate || v.matched) continue;
+        const float pr = presence (v.targetMidi);
+        bool maskedByNeighbour = false;   // leakage from a much louder note a semitone or two away
+        for (auto& o : voices)
+            if (&o != &v && o.gate && o.matched && std::abs (o.targetMidi - v.targetMidi) < 2.5f && o.ampTarget > 2.0f * pr)
+                maskedByNeighbour = true;
+        const bool ringing = ! maskedByNeighbour && pr > juce::jmax (threshLin * 0.7f, juce::jmax (v.peakAmp * juce::Decibels::decibelsToGain (tunRingDb), loudest * tunRelHold));
+        if (v.reconfirm > 0)
+        {
+            // after a strum, a note that is still clearly there counts as re-played
+            if (pr > 0.3f * loudest && ringing) { v.reconfirm = 0; v.misses = 0; v.ampTarget = pr; continue; }
+            if (--v.reconfirm == 0) noteOff (vi, sampleIndex);
+            continue;
+        }
+        if (ringing) { v.misses = 0; v.ampTarget = pr; continue; }   // string still sounding: keep holding
+        v.ampTarget *= 0.7f;
+        if (++v.misses >= 3) noteOff (vi, sampleIndex);
+    }
+
+    // --- new notes: two frames in a row (one on a clear pick), loud enough, and not a harmonic ghost
+    float loudestHeld = 0;
+    for (auto& v : voices) if (v.gate) loudestHeld = juce::jmax (loudestHeld, v.ampTarget);
+    const float floorAmp = juce::jmax (loudest, loudestHeld) * juce::Decibels::decibelsToGain (tunFloorDb);
+    auto isGhost = [&] (const Detection& d)
+    {
+        static const float ivals[] = { 12.0f, 19.0f, 24.0f, 28.0f, 31.0f };
+        auto check = [&] (float m, float a)
+        {
+            for (float iv : ivals) if (std::abs (d.midi - m - iv) < 0.5f && d.amp < 0.6f * a) return true;
+            // a weak note right next to a strong one is usually leakage from the strong note's attack
+            if (std::abs (d.midi - m) > 0.5f && std::abs (d.midi - m) < 2.5f && d.amp < 0.5f * a) return true;
+            return false;
+        };
+        for (auto& o : dets) if (&o != &d && check (o.midi, o.amp)) return true;
+        for (auto& v : voices) if (v.gate && check (v.targetMidi, v.ampTarget)) return true;
+        return false;
+    };
+
     float newPending[8]; int newHits[8]; int nNew = 0;
     for (size_t di = 0; di < dets.size(); ++di)
     {
         if (used[di]) continue;
+        const auto& d = dets[di];
+        if (d.amp < floorAmp || isGhost (d)) continue;
         int hits = 1;
         for (int pi = 0; pi < numPending; ++pi)
-            if (std::abs (pendingMidi[pi] - dets[di].midi) < 0.6f) hits = pendingHits[pi] + 1;
-        if (hits >= 2 || (onset && dets[di].amp > threshLin * 3.0f))
-            noteOn (findFreeVoice(), dets[di].midi, dets[di].amp, sampleIndex);
-        else if (nNew < 8)
+            if (std::abs (pendingMidi[pi] - d.midi) < 0.6f) hits = pendingHits[pi] + 1;
+        if (hits >= 2 || (prevOnset && ! onset && d.amp > threshLin * 3.0f && d.amp > tunFast * loudest))
         {
-            newPending[nNew] = dets[di].midi; newHits[nNew] = hits; ++nNew;
+            int gatedCount = 0;
+            for (auto& vv : voices) gatedCount += vv.gate ? 1 : 0;
+            int vi = findFreeVoice();
+            if (gatedCount >= (int) tunMaxNotes)
+            {
+                // full: replace the quietest held note only if this one is clearly louder
+                float q = 1e9f; vi = -1;
+                for (int k = 0; k < maxVoices; ++k) if (voices[(size_t) k].gate && voices[(size_t) k].ampTarget < q) { q = voices[(size_t) k].ampTarget; vi = k; }
+                if (vi < 0 || d.amp < q * 1.5f) continue;
+            }
+            auto& v = voices[(size_t) vi];
+            if (v.gate && d.amp < v.ampTarget * 1.5f) continue;   // don't steal a held note for a weaker one
+            noteOn (vi, d.midi, d.amp, sampleIndex);
+            v.peakAmp = d.amp; v.histN = 0; v.reconfirm = 0;
         }
+        else if (nNew < 8) { newPending[nNew] = d.midi; newHits[nNew] = hits; ++nNew; }
     }
     numPending = nNew;
     for (int i = 0; i < nNew; ++i) { pendingMidi[i] = newPending[i]; pendingHits[i] = newHits[i]; }
+    prevOnset = onset;
 }
 
 void HexwireProcessor::analyseMono (int sampleIndex)
@@ -480,6 +548,7 @@ void HexwireProcessor::analyseMono (int sampleIndex)
             }
             v.targetMidi = midi;
             v.ampTarget = rms * 1.41f;
+            v.peakAmp = juce::jmax (v.peakAmp, v.ampTarget);
         }
     }
     else
@@ -511,9 +580,13 @@ void HexwireProcessor::noteOn (int idx, float midi, float amp, int sampleOffset)
 {
     auto& v = voices[(size_t) idx];
     if (v.gate) noteOff (idx, sampleOffset);
+    const bool wasSounding = v.active && v.env > 0.05f;
+    if (wasSounding) v.env *= 0.35f;    // duck before jumping to the new note (avoids a click)
+    else v.gainSm = 0.0f;
     v.gate = v.active = true;
     v.targetMidi = v.curMidi = midi;
     v.ampTarget = v.amp = amp;
+    v.peakAmp = amp;
     v.vel = juce::jlimit (0.15f, 1.0f, std::pow (amp / 0.2f, 0.6f));
     v.strike = true;
     v.misses = 0;
@@ -559,11 +632,14 @@ float HexwireProcessor::renderEngine (EngineState& st, int engine, float f, Voic
     {
         case Cello:
         {
-            float s = sawAt (st.ph[0], inc); advance (st.ph[0], inc);
-            s += 0.03f * noise();
-            const auto lp = svf (s, f * (2.5f + 9.0f * tone), 0.8f, fsr, st.lp1, st.lp2);
-            const auto fm = svf (s, 1150.0f, 3.0f, fsr, st.bp1, st.bp2);
-            return 0.9f * lp.lp + 0.5f * fm.bp;
+            // two slightly detuned saws (a little ensemble movement), smooth key-tracked rolloff, soft body resonance
+            const double inc2 = inc * 1.0025;
+            float s = 0.6f * (sawAt (st.ph[0], inc) + sawAt (st.ph[1], inc2));
+            advance (st.ph[0], inc); advance (st.ph[1], inc2);
+            const auto lp = svf (s, f * (2.0f + 7.0f * tone), 0.6f, fsr, st.lp1, st.lp2);
+            const auto lp2 = svf (lp.lp, f * (3.0f + 10.0f * tone), 0.6f, fsr, st.cp1, st.cp2);
+            const auto fm = svf (lp.lp, 900.0f, 1.5f, fsr, st.bp1, st.bp2);
+            return lp2.lp + 0.25f * fm.bp;
         }
         case Marimba:
         {
@@ -623,7 +699,7 @@ float HexwireProcessor::renderEngine (EngineState& st, int engine, float f, Voic
             if (f * 3 < nyq) out += 0.05f * sine (st.ph[2]);
             advance (st.ph[0], inc); advance (st.ph[1], inc * 2); advance (st.ph[2], inc * 3);
             const auto br = svf (noise(), juce::jmin (nyq, f * 2.0f), 1.5f, fsr, st.bp1, st.bp2);
-            return 0.8f * out + br.bp * (0.12f + 0.3f * tone + 0.6f * st.bright);
+            return 0.85f * out + br.bp * (0.04f + 0.1f * tone + 0.35f * st.bright);
         }
         case Brass:
         {
@@ -644,10 +720,10 @@ float HexwireProcessor::renderEngine (EngineState& st, int engine, float f, Voic
             const float t = tone * 2.0f;
             const float f1 = t < 1 ? 400 + 350 * t : 750 - 200 * (t - 1);
             const float f2 = t < 1 ? 800 + 350 * t : 1150 + 650 * (t - 1);
-            const auto a = svf (s, f1, 5.0f, fsr, st.bp1, st.bp2);
-            const auto b = svf (s, f2, 6.0f, fsr, st.cp1, st.cp2);
-            const auto body = svf (s, 2800.0f, 0.7f, fsr, st.lp1, st.lp2);
-            return 1.6f * a.bp + 1.1f * b.bp + 0.12f * body.lp;
+            const auto body = svf (s, juce::jmin (3200.0f, f * 10.0f), 0.6f, fsr, st.lp1, st.lp2);
+            const auto a = svf (body.lp, f1, 3.0f, fsr, st.bp1, st.bp2);
+            const auto b = svf (body.lp, f2, 3.5f, fsr, st.cp1, st.cp2);
+            return 1.3f * a.bp + 0.8f * b.bp + 0.35f * body.lp;
         }
         case Organ:
         {
@@ -665,23 +741,25 @@ float HexwireProcessor::renderEngine (EngineState& st, int engine, float f, Voic
         }
         case Pad:
         {
-            static const float cents[5] = { 0, 7, -7, 14, -14 };
+            static const float cents[5] = { 0, 4, -4, 9, -9 };
             float s = 0;
             for (int i = 0; i < 5; ++i)
             {
                 const double vi = inc * std::exp2 (cents[i] / 1200.0f);
                 s += sawAt (st.ph[i], vi); advance (st.ph[i], vi);
             }
-            const auto lp = svf (s * 0.3f, f * 2.0f + 400.0f + 7000.0f * tone * tone, 0.7f, fsr, st.lp1, st.lp2);
-            return lp.lp;
+            const auto lp = svf (s * 0.3f, f * (1.5f + 9.0f * tone * tone) + 200.0f, 0.6f, fsr, st.lp1, st.lp2);
+            const auto lp2 = svf (lp.lp, f * (3.0f + 12.0f * tone) + 300.0f, 0.6f, fsr, st.bp1, st.bp2);
+            return lp2.lp;
         }
         case Chip:
         {
-            const double duty = 0.5 - 0.375 * tone;
+            const double duty = 0.5 - 0.25 * tone;
             double ph2 = st.ph[0] + duty; if (ph2 >= 1) ph2 -= 1;
             const float s = sawAt (st.ph[0], inc) - sawAt (ph2, inc);
             advance (st.ph[0], inc);
-            return 0.55f * s;
+            const auto lp = svf (s, f * (6.0f + 20.0f * tone), 0.6f, fsr, st.lp1, st.lp2);
+            return 0.55f * lp.lp;
         }
         case Kalimba:
         {
@@ -694,6 +772,27 @@ float HexwireProcessor::renderEngine (EngineState& st, int engine, float f, Voic
             advance (st.ph[0], inc); advance (st.ph[1], inc * 5.9);
             const auto th = svf (noise() * st.click, 300.0f, 1.0f, fsr, st.bp1, st.bp2);
             return out + 0.5f * th.bp;
+        }
+        case Analog:
+        {
+            // one clean saw per note + a quiet square an octave down, smooth 12 dB/oct key-tracked rolloff
+            float s = sawAt (st.ph[0], inc); advance (st.ph[0], inc);
+            const double incSub = inc * 0.5;
+            const float sq = st.ph[1] < 0.5 ? 1.0f : -1.0f;
+            s += 0.25f * (sq - polyBlep (st.ph[1], incSub) + polyBlep (std::fmod (st.ph[1] + 0.5, 1.0), incSub));
+            advance (st.ph[1], incSub);
+            const auto lp = svf (s, f * (1.8f + 9.0f * tone), 0.65f, fsr, st.lp1, st.lp2);
+            const auto lp2 = svf (lp.lp, f * (2.5f + 14.0f * tone), 0.6f, fsr, st.bp1, st.bp2);
+            return lp2.lp;
+        }
+        case Soft:
+        {
+            // warm rounded tone: triangle + sine octave, gently filtered (electric-piano / soft pad feel)
+            const float tri = 4.0f * std::abs ((float) st.ph[0] - 0.5f) - 1.0f;
+            float out = 0.8f * tri + 0.3f * sine (st.ph[1]) + 0.15f * tone * sawAt (st.ph[2], inc);
+            advance (st.ph[0], inc); advance (st.ph[1], inc * 2.0); advance (st.ph[2], inc);
+            const auto lp = svf (out, f * (3.0f + 10.0f * tone), 0.6f, fsr, st.lp1, st.lp2);
+            return lp.lp;
         }
         case Sub:
         default:
@@ -745,6 +844,7 @@ void HexwireProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const float dt = 1.0f / (float) sr;
     const float glideCoef = 1.0f - std::exp (-1.0f / (glideMs * 0.001f * (float) sr));
     const float ampCoef = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
+    const float gainCoef = 1.0f - std::exp (-1.0f / (0.006f * (float) sr));
     const float attackInc = dt / juce::jmax (0.001f, attackS);
     const float releaseCoef = std::exp (-1.0f / (juce::jmax (0.01f, releaseS) * 0.25f * (float) sr));
     const float detRatio = std::exp2 (detune / 1200.0f);
@@ -780,15 +880,19 @@ void HexwireProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             if (v.gate) v.env = juce::jmin (1.0f, v.env + attackInc);
             else        v.env *= releaseCoef;
 
-            const float vibAmt = vib * 0.4f * juce::jmin (1.0f, v.age / 0.5f);
+            const float vibAmt = vib * 0.3f * juce::jmin (1.0f, v.age / 0.6f);
             const float m = v.curMidi + vibAmt * std::sin (twoPi * (float) vibPh);
             const float fA = midiToHz (m + 12.0f * octA);
             const float fB = midiToHz (m + 12.0f * octB) * detRatio;
             const bool strike = v.strike;
             v.strike = false;
 
-            const float follow = juce::jlimit (0.0f, 1.5f, v.amp / 0.2f);
-            const float dynGain = 1.0f + dyn * (follow - 1.0f);
+            // held notes sustain like a bow: loudness is set by how hard you picked; Dynamics adds back
+            // some of the string's natural fade (0 = steady sustain, 1 = follows the guitar)
+            const float fade = juce::jlimit (0.001f, 1.0f, v.amp / juce::jmax (1e-6f, v.peakAmp));
+            const float dynTarget = std::sqrt (v.vel) * std::pow (fade, dyn * 0.6f) * 1.6f;
+            v.gainSm += (dynTarget - v.gainSm) * gainCoef;   // smoothed: no clicks when a note is re-picked
+            const float dynGain = v.gainSm;
 
             float s = 0;
             if (blend < 0.999f)
@@ -815,7 +919,7 @@ void HexwireProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         const float drive = driveS.getNextValue();
         if (drive > 0.001f)
         {
-            const float g = 1.0f + 12.0f * drive;
+            const float g = 1.0f + 6.0f * drive;
             synth = std::tanh (synth * g) / std::sqrt (g);
         }
 
@@ -851,8 +955,8 @@ void HexwireProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         rp.roomSize = 0.55f + 0.4f * sp;
         rp.damping = 0.45f;
         rp.width = 1.0f;
-        rp.wetLevel = 0.55f * sp;
-        rp.dryLevel = 1.0f - 0.35f * sp;
+        rp.wetLevel = 0.4f * sp;
+        rp.dryLevel = 1.0f - 0.25f * sp;
         reverb.setParameters (rp);
         if (sp > 0.001f) reverb.processStereo (wl, wr, n);
     }
@@ -863,8 +967,14 @@ void HexwireProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         const float mixv = mixS.getNextValue(), g = outS.getNextValue();
         float dryL = numIn > 0 ? buffer.getSample (0, i) : 0.0f;
         float dryR = numIn > 1 ? buffer.getSample (1, i) : dryL;
-        const float L = (dryL * (1.0f - mixv) + wl[i] * mixv) * g;
-        const float R = (dryR * (1.0f - mixv) + wr[i] * mixv) * g;
+        // gentle safety limiter: transparent below about -3 dBFS, never hard-clips
+        auto safe = [] (float x)
+        {
+            const float a = std::abs (x);
+            return a < 0.7f ? x : std::copysign (0.7f + 0.29f * std::tanh ((a - 0.7f) / 0.29f), x);
+        };
+        const float L = safe ((dryL * (1.0f - mixv) + wl[i] * mixv) * g);
+        const float R = safe ((dryR * (1.0f - mixv) + wr[i] * mixv) * g);
         if (numOut > 0) buffer.setSample (0, i, L);
         if (numOut > 1) buffer.setSample (1, i, R);
     }

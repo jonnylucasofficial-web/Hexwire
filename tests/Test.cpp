@@ -124,6 +124,46 @@ int main (int argc, char** argv)
         auto p = fresh (1); std::set<int> got; run (*p, x, 0.45, &got);
         std::printf ("got { %s}\n", setStr (got).c_str()); return 0;
     }
+    // render a real recording: HexwireTests out file in.wav out.wav presetIndex [notes.csv]
+    if (argc > 5 && juce::String (argv[2]) == "file")
+    {
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (argv[3])));
+        if (! rd) { std::printf ("cannot read %s\n", argv[3]); return 1; }
+        const int len = (int) rd->lengthInSamples;
+        juce::AudioBuffer<float> in ((int) rd->numChannels, len);
+        rd->read (&in, 0, len, 0, true, true);
+        auto p = std::make_unique<HexwireProcessor>();
+        p->setRateAndBufferSizeDetails (rd->sampleRate, BS);
+        p->prepareToPlay (rd->sampleRate, BS);
+        p->setCurrentProgram (juce::String (argv[5]).getIntValue());
+        if (auto* ov = std::getenv ("HW_SET"))   // e.g. HW_SET="mix=1,space=0"
+            for (auto kv : juce::StringArray::fromTokens (ov, ",", ""))
+                setParam (*p, kv.upToFirstOccurrenceOf ("=", false, false).toRawUTF8(), kv.fromFirstOccurrenceOf ("=", false, false).getFloatValue());
+        juce::AudioBuffer<float> out (2, len); out.clear();
+        juce::AudioBuffer<float> blk (2, BS); juce::MidiBuffer midi;
+        std::unique_ptr<juce::FileOutputStream> csv;
+        if (argc > 6) { juce::File (argv[6]).deleteFile(); csv = std::make_unique<juce::FileOutputStream> (juce::File (argv[6])); }
+        for (int s = 0; s + BS <= len; s += BS)
+        {
+            for (int c = 0; c < 2; ++c) blk.copyFrom (c, 0, in, juce::jmin (c, in.getNumChannels() - 1), s, BS);
+            p->processBlock (blk, midi);
+            for (int c = 0; c < 2; ++c) out.copyFrom (c, s, blk, c, 0, BS);
+            if (csv)
+            {
+                juce::String line (s / rd->sampleRate, 4);
+                for (int v = 0; v < HexwireProcessor::maxVoices; ++v) line << "," << juce::String (p->displayMidi[(size_t) v].load(), 2);
+                csv->writeText (line + "\n", false, false, nullptr);
+            }
+        }
+        juce::File of (argv[4]); of.deleteFile();
+        juce::WavAudioFormat wav;
+        if (auto os = std::unique_ptr<juce::OutputStream> (of.createOutputStream()))
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (os.get(), rd->sampleRate, 2, 24, {}, 0)))
+            { os.release(); w->writeFromAudioSampleBuffer (out, 0, len); }
+        std::printf ("rendered %s\n", argv[4]);
+        return 0;
+    }
     const bool enginesOnly = argc > 2 && juce::String (argv[2]) == "engines";
     if (! presetsOnly)
     {
@@ -197,11 +237,11 @@ int main (int argc, char** argv)
       }
         // ---------- every engine on a chord, extreme settings: NaN / blow-up check
         auto chord = chordSignal ({ 40, 47, 52, 56, 59, 64 }, 1.5, rng, 0.45f);
-        for (int e = 0; e < 12; ++e)
+        for (int e = 0; e < 14; ++e)
             for (int extreme = 0; extreme < 2; ++extreme)
             {
                 auto p = fresh (1);
-                setParam (*p, "engA", (float) e); setParam (*p, "engB", (float) ((e + 5) % 12));
+                setParam (*p, "engA", (float) e); setParam (*p, "engB", (float) ((e + 5) % 14));
                 setParam (*p, "blend", 0.5f); setParam (*p, "mix", 1.0f);
                 if (extreme)
                 {
@@ -266,7 +306,7 @@ int main (int argc, char** argv)
         add ({ 45, 52, 57, 60, 64 }, 2.1, 1.6);
         double inE = 0; for (float v : phrase) inE += v * v;
         const double inRms = std::sqrt (inE / phrase.size());
-        for (int e = 0; e < 12; ++e)
+        for (int e = 0; e < 14; ++e)
         {
             auto p = fresh (1);
             setParam (*p, "engA", (float) e); setParam (*p, "blend", 0); setParam (*p, "mix", 1);

@@ -38,7 +38,7 @@ private:
     juce::ComboBox presetBox;
     juce::TextButton prevButton { "<" }, nextButton { ">" };
     std::vector<std::unique_ptr<Knob>> knobs;
-    std::array<juce::TextButton, 12> engA, engB;
+    std::array<juce::TextButton, 14> engA, engB;
     juce::TextButton monoButton { "MONO" }, polyButton { "POLY" };
     std::array<juce::TextButton, 3> midiButtons;
     juce::Rectangle<int> wiresArea, engAArea, engBArea, knobArea;

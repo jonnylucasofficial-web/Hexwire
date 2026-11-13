@@ -122,9 +122,9 @@ HexwireEditor::HexwireEditor (HexwireProcessor& p) : AudioProcessorEditor (&p), 
         knobs.push_back (std::move (k));
     }
 
-    auto setupEngines = [this] (std::array<juce::TextButton, 12>& arr, const char* id, juce::Colour c)
+    auto setupEngines = [this] (std::array<juce::TextButton, 14>& arr, const char* id, juce::Colour c)
     {
-        for (int i = 0; i < 12; ++i)
+        for (int i = 0; i < 14; ++i)
         {
             auto& b = arr[(size_t) i];
             b.setButtonText (HexwireProcessor::engineNames[i].toUpperCase());
@@ -209,7 +209,7 @@ void HexwireEditor::timerCallback()
 
     const int a = (int) proc.apvts.getRawParameterValue ("engA")->load();
     const int b = (int) proc.apvts.getRawParameterValue ("engB")->load();
-    for (int i = 0; i < 12; ++i)
+    for (int i = 0; i < 14; ++i)
     {
         engA[(size_t) i].setToggleState (i == a, juce::dontSendNotification);
         engB[(size_t) i].setToggleState (i == b, juce::dontSendNotification);
@@ -365,12 +365,12 @@ void HexwireEditor::resized()
     engBArea = engines;
     {
         auto area = engAArea.reduced (10, 0).withTrimmedTop (24).withTrimmedBottom (8);
-        const int bw = area.getWidth() / 6, bh = area.getHeight() / 2;
-        for (int i = 0; i < 12; ++i)
-            engA[(size_t) i].setBounds (juce::Rectangle<int> (area.getX() + (i % 6) * bw, area.getY() + (i / 6) * bh, bw, bh).reduced (2));
+        const int bw = area.getWidth() / 7, bh = area.getHeight() / 2;
+        for (int i = 0; i < 14; ++i)
+            engA[(size_t) i].setBounds (juce::Rectangle<int> (area.getX() + (i % 7) * bw, area.getY() + (i / 7) * bh, bw, bh).reduced (2));
         area = engBArea.reduced (10, 0).withTrimmedTop (24).withTrimmedBottom (8);
-        for (int i = 0; i < 12; ++i)
-            engB[(size_t) i].setBounds (juce::Rectangle<int> (area.getX() + (i % 6) * bw, area.getY() + (i / 6) * bh, bw, bh).reduced (2));
+        for (int i = 0; i < 14; ++i)
+            engB[(size_t) i].setBounds (juce::Rectangle<int> (area.getX() + (i % 7) * bw, area.getY() + (i / 7) * bh, bw, bh).reduced (2));
     }
 
     r.removeFromTop (10);

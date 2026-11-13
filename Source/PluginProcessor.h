@@ -82,11 +82,15 @@ private:
         float ampTarget = 0, amp = 0;
         float vel = 0.8f;
         float env = 0;              // attack/release envelope 0..1
+        float gainSm = 0;           // smoothed output gain
         float silentTime = 0;
         bool strike = false;        // trigger percussive engines on next sample
         int misses = 0;             // tracker frames without a detection
         bool matched = false;
         float age = 0;              // seconds since note on (for delayed vibrato)
+        float peakAmp = 0;          // loudest this note has been (for the 'still ringing' test)
+        int reconfirm = 0;          // frames left for a held note to show up again after a new strum
+        float hist[3] {}; int histN = 0;   // recent pitch readings
         int midiNote = -1;          // MIDI out note number
         int midiChan = 1;
         EngineState a, b;
@@ -130,6 +134,7 @@ private:
     std::vector<Detection> dets;
     float pendingMidi[8] {}; int pendingHits[8] {}; int numPending = 0;
     float lastFrameRms = 0;
+    bool prevOnset = false;
 
     // mono: YIN
     std::vector<float> yinBuf, yinD;
